@@ -1,6 +1,6 @@
 {
 	"name": "astro-agent-markdown",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"description": "Astro integration that serves a clean Markdown version of every page to AI agents: static .md files, content negotiation and llms.txt.",
 	"author": "Łukasz Adamski (https://github.com/lukasz-adamski)",
 	"license": "MIT",
