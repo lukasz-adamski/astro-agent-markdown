@@ -1,7 +1,7 @@
 {
 	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
 	"files": {
-		"includes": ["**", "!**/dist", "!**/.astro", "!test/fixtures/**/*.astro", "!**/*.md"]
+		"includes": ["**", "!**/dist", "!**/.astro", "!test/fixtures/**/*.astro", "!**/*.md", "!pnpm-lock.yaml"]
 	},
 	"formatter": {
 		"indentStyle": "tab",
