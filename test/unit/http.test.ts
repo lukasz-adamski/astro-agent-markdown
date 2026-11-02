@@ -76,6 +76,14 @@ describe('toMarkdownResponse', () => {
 		expect(await response.text()).toBe('---\ntitle: T\nurl: https://example.com/docs/a/\n---\n\n# Hello\n');
 	});
 
+	it('links .md responses to their page as canonical', async () => {
+		const extension = handler.match(new URL('https://example.com/docs/a.md'), null);
+		if (!extension) throw new Error('Expected a match');
+		const response = await handler.toMarkdownResponse(html('<p>x</p>'), extension);
+		expect(response.headers.get('link')).toBe('<https://example.com/docs/a/>; rel="canonical"');
+		expect((await handler.toMarkdownResponse(html('<p>x</p>'), match)).headers.get('link')).toBeNull();
+	});
+
 	it('keeps an existing Content-Signal header', async () => {
 		const response = await handler.toMarkdownResponse(html('<p>x</p>', { 'content-signal': 'search=yes' }), match);
 		expect(response.headers.get('content-signal')).toBe('search=yes');

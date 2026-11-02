@@ -75,7 +75,8 @@ describe('static build', () => {
 
 	it('emits a Cloudflare Worker hidden from the assets', async () => {
 		expect(await read('_worker.js')).toContain(
-			'export default createMarkdownWorker({"base":"/","outputPath":"sibling","negotiation":"rewrite",' +
+			'export default createMarkdownWorker({"base":"/","outputPath":"sibling","trailingSlash":"ignore",' +
+				'"buildFormat":"directory","negotiation":"rewrite",' +
 				'"contentSignal":"ai-train=no, search=yes, ai-input=yes"});',
 		);
 		expect(await read('.assetsignore')).toBe('# astro-agent-markdown\n_worker.js\n');

@@ -191,8 +191,8 @@ export type LlmsTxtLocaleOptions = Omit<LlmsTxtOptions, 'path' | 'locales' | 'in
 export interface CloudflareOptions {
 	/**
 	 * Add a `_headers` rule setting `Content-Signal` on `.md` files when
-	 * `contentSignal` is configured. Workers static assets already serve them
-	 * as `text/markdown; charset=utf-8`.
+	 * `contentSignal` is configured. Workers static assets serve them as
+	 * `text/markdown` without a charset; the Worker adds it.
 	 * @default true
 	 */
 	headers?: boolean;

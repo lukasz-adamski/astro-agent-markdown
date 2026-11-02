@@ -128,6 +128,7 @@ Markdown responses have these headers:
 | `Content-Type`   | `text/markdown; charset=utf-8`              |
 | `Vary`           | `Accept`, merged with existing values       |
 | `Content-Signal` | only when the `contentSignal` option is set |
+| `Link`           | `<page URL>; rel="canonical"` on `.md` URLs, so search engines index the HTML page instead of the copy |
 
 `Content-Length`, `Content-Encoding`, `ETag` and `Last-Modified` are removed, because they describe the HTML body. Other headers are kept, including cookies.
 
@@ -339,11 +340,13 @@ With `cloudflare: true`, a static build writes three extra files to `dist/`:
 
 | File | Purpose |
 | --- | --- |
-| `_headers` | A `/*.md` rule with `Content-Signal`, when `contentSignal` is set. Appended to your own `public/_headers` if you have one. Static assets already serve `.md` files as `text/markdown; charset=utf-8`. |
-| `_worker.js` | A Worker that serves the page's Markdown file for `Accept: text/markdown` and adds `Vary: Accept` to HTML. It imports `astro-agent-markdown/cloudflare`, which Wrangler bundles (about 6 KiB). |
+| `_headers` | A `/*.md` rule with `Content-Signal`, when `contentSignal` is set. Appended to your own `public/_headers` if you have one. |
+| `_worker.js` | A Worker that serves the page's Markdown file for `Accept: text/markdown` and adds `Vary: Accept` to HTML. It also completes the headers of static files: `charset=utf-8` on `.md` and `.txt` files and a canonical `Link` from each `.md` file to its page. It imports `astro-agent-markdown/cloudflare`, which Wrangler bundles (about 6 KiB). |
+
+Static assets serve `.md` and `.txt` files as `text/markdown` and `text/plain` without a `charset` in production (`wrangler dev` adds one). The files are UTF-8, but clients that follow the HTTP defaults, such as Python's `requests`, decode them as ISO-8859-1 and garble every non-ASCII character. A `Content-Type` line in `_headers` can't fix this: its rules also apply to the HTML 404 page of a missing file. The Worker, or the zone rules [below](#cloudflare-without-a-worker), add the charset to successful responses only.
 | `.assetsignore` | Lists `_worker.js`, so the Worker isn't uploaded as a public file. |
 
-Point Wrangler at the generated Worker. `run_worker_first` sends page requests to the Worker, while scripts, styles and `.md` files are still served directly as free static requests:
+Point Wrangler at the generated Worker. `run_worker_first` sends page, `.md` and `.txt` requests to the Worker, while scripts and styles are still served directly as free static requests:
 
 ```jsonc
 // wrangler.jsonc
@@ -355,7 +358,7 @@ Point Wrangler at the generated Worker. `run_worker_first` sends page requests t
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "404-page",
-    "run_worker_first": ["/*", "!/_astro/*", "!/*.md"]
+    "run_worker_first": ["/*", "!/_astro/*"]
   }
 }
 ```
@@ -364,21 +367,24 @@ Point Wrangler at the generated Worker. `run_worker_first` sends page requests t
 astro build && wrangler deploy
 ```
 
+Add `!/*.md` to keep `.md` files as free static requests; they then need the zone rules for the charset and canonical link. Exclude other folders of static files the same way, such as `!/images/*`.
+
 The Worker reads only static files. It never converts HTML at request time, and it keeps `ETag` and conditional requests working. Pages without a Markdown file (excluded or opted out) fall back to HTML. With `negotiation: 'redirect'`, agents get a `302` to the `.md` URL instead.
 
-If you already have a Worker, set `cloudflare: { worker: false }` and call `serveMarkdown` yourself:
+If you already have a Worker, set `cloudflare: { worker: false }` and call `serveMarkdown` and `decorateResponse` yourself:
 
 ```ts
-import { serveMarkdown } from 'astro-agent-markdown/cloudflare';
+import { decorateResponse, serveMarkdown } from 'astro-agent-markdown/cloudflare';
 
 export default {
   async fetch(request, env) {
-    return (await serveMarkdown(request, env.ASSETS)) ?? env.ASSETS.fetch(request);
+    const markdown = await serveMarkdown(request, env.ASSETS);
+    return markdown ?? decorateResponse(request, await env.ASSETS.fetch(request));
   },
 };
 ```
 
-`serveMarkdown` and `createMarkdownWorker` accept `base`, `outputPath`, `negotiation` and `contentSignal`. Use the same values as in the integration. The worker is skipped for server output: there, the Cloudflare adapter's Worker serves on-demand pages through the integration's middleware.
+`serveMarkdown`, `decorateResponse` and `createMarkdownWorker` accept `base`, `outputPath`, `trailingSlash`, `buildFormat`, `negotiation` and `contentSignal`. Use the same values as in your Astro config and the integration. The worker is skipped for server output: there, the Cloudflare adapter's Worker serves on-demand pages through the integration's middleware.
 
 ### Cloudflare without a Worker
 
@@ -399,7 +405,7 @@ agentMarkdown({ cloudflare: { worker: false } });
 }
 ```
 
-Every page still has a `.md` URL with the right `Content-Type` and `Content-Signal`. Agents find it through `<link rel="alternate">` and `llms.txt`. The only thing missing is `Accept: text/markdown` on the page URL itself, which returns HTML.
+Every page still has a `.md` URL with `Content-Signal`. Agents find it through `<link rel="alternate">` and `llms.txt`. Two things are missing: `Accept: text/markdown` on the page URL itself returns HTML, and `.md` and `.txt` files come without a charset. The build log reminds you of the second. The zone rules below fix both.
 
 **Zone rules.** If the site runs on a custom domain, [URL rewrite rules](https://developers.cloudflare.com/rules/transform/url-rewrite/) can map negotiated requests to the Markdown files. These rules run before Workers and static assets. Create them in the zone, under **Rules** → **Transform Rules**, in this order:
 
@@ -428,6 +434,28 @@ Every page still has a `.md` URL with the right `Content-Type` and `Content-Sign
          or any(http.response.headers["content-type"][*] contains "text/markdown")
    Add header: Vary = Accept
    ```
+
+4. **Charset** (two response header modifications). Limited to status 200, so the HTML 404 page keeps its type:
+
+   ```
+   When: ends_with(http.request.uri.path, ".md") and http.response.code eq 200
+   Set static header: Content-Type = text/markdown; charset=utf-8
+
+   When: ends_with(http.request.uri.path, ".txt") and http.response.code eq 200
+   Set static header: Content-Type = text/plain; charset=utf-8
+   ```
+
+   These two rules don't depend on URL rewrites and work on any plan with a custom domain.
+
+5. **Canonical link** (response header modification), optional, so search engines index the HTML page instead of the `.md` copy:
+
+   ```
+   When: ends_with(http.request.uri.path, ".md") and http.request.uri.path ne "/index.md"
+         and http.response.code eq 200
+   Set dynamic header: Link = concat("<https://example.com", substring(http.request.uri.path, 0, -3), "/>; rel=\"canonical\"")
+   ```
+
+   This fits the default `outputPath: 'sibling'` and pages with a trailing slash. Add a rule with the static value `<https://example.com/>; rel="canonical"` for `/index.md`.
 
 Compared with the generated Worker, the rules have these limits:
 

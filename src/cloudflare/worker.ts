@@ -1,6 +1,15 @@
 import { appendVary, isHtml } from '../core/headers.js';
 import { prefersMarkdown } from '../core/negotiation.js';
-import { type OutputPath, stripBase, toMarkdownPath, withBase } from '../core/routing.js';
+import {
+	type BuildFormat,
+	fromMarkdownPath,
+	type OutputPath,
+	stripBase,
+	type TrailingSlash,
+	toMarkdownPath,
+	toPagePath,
+	withBase,
+} from '../core/routing.js';
 
 /** The part of the Workers static assets binding used here. */
 export interface AssetsBinding {
@@ -12,6 +21,10 @@ export interface MarkdownWorkerOptions {
 	base?: string;
 	/** Same as the integration's `outputPath`. @default 'sibling' */
 	outputPath?: OutputPath;
+	/** Astro `trailingSlash`, for the canonical link of `.md` files. @default 'ignore' */
+	trailingSlash?: TrailingSlash;
+	/** Astro `build.format`, for the canonical link of `.md` files. @default 'directory' */
+	buildFormat?: BuildFormat;
 	/**
 	 * How a request negotiating `text/markdown` is answered:
 	 * `'rewrite'` serves the Markdown file at the page URL, `'redirect'` sends
@@ -62,8 +75,30 @@ export async function serveMarkdown(
 }
 
 /**
+ * Completes the headers of a static asset response:
+ * - `Vary: Accept` on HTML, so caches keep HTML and Markdown apart;
+ * - `charset=utf-8` on Markdown and plain text files, which static assets
+ *   serve without a charset;
+ * - a canonical `Link` from a `.md` file to its HTML page.
+ */
+export function decorateResponse(request: Request, response: Response, options: MarkdownWorkerOptions = {}): Response {
+	if (!response.ok) return response;
+	const html = isHtml(response);
+	const type = response.headers.get('content-type') ?? '';
+	const text = /^text\/(?:markdown|plain)\b/i.test(type);
+	if (!html && !text) return response;
+
+	const headers = new Headers(response.headers);
+	if (html) appendVary(headers, 'Accept');
+	if (text && !/;\s*charset=/i.test(type)) headers.set('content-type', `${type}; charset=utf-8`);
+	const canonical = text && canonicalUrl(request, options);
+	if (canonical) headers.append('link', `<${canonical}>; rel="canonical"`);
+	return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+/**
  * Creates a Worker serving static assets with Markdown content negotiation.
- * HTML responses get `Vary: Accept` so caches keep both variants apart.
+ * Other responses go through `decorateResponse`.
  */
 export function createMarkdownWorker(options: MarkdownWorkerOptions = {}): {
 	fetch(request: Request, env: Record<string, unknown>): Promise<Response>;
@@ -78,14 +113,19 @@ export function createMarkdownWorker(options: MarkdownWorkerOptions = {}): {
 
 			const markdown = await serveMarkdown(request, assets, options);
 			if (markdown) return markdown;
-
-			const response = await assets.fetch(request);
-			if (!isHtml(response)) return response;
-			const headers = new Headers(response.headers);
-			appendVary(headers, 'Accept');
-			return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+			return decorateResponse(request, await assets.fetch(request), options);
 		},
 	};
+}
+
+/** URL of the HTML page of a requested `.md` file. */
+function canonicalUrl(request: Request, options: MarkdownWorkerOptions): string | undefined {
+	const { base = '/', outputPath = 'sibling', trailingSlash = 'ignore', buildFormat = 'directory' } = options;
+	const url = new URL(request.url);
+	const pathname = stripBase(url.pathname, base);
+	if (pathname === undefined || !pathname.endsWith('.md')) return undefined;
+	const page = toPagePath(fromMarkdownPath(pathname), { base, outputPath, trailingSlash, buildFormat });
+	return new URL(page, url).href;
 }
 
 /** `not_found_handling: 'single-page-application'` answers missing files with HTML. */

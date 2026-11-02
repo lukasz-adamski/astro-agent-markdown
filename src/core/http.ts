@@ -94,6 +94,10 @@ export function createRequestHandler(config: HandlerConfig, hooks?: ConversionHo
 			for (const name of STALE_HEADERS) headers.delete(name);
 			headers.set('content-type', 'text/markdown; charset=utf-8');
 			appendVary(headers, 'Accept');
+			if (match.via === 'extension') {
+				const page = toPagePath(match.pathname, config);
+				headers.append('link', `<${config.site ? new URL(page, config.site).href : page}>; rel="canonical"`);
+			}
 			if (config.contentSignal && !headers.has('content-signal')) {
 				headers.set('content-signal', config.contentSignal);
 			}

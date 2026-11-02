@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { type AssetsBinding, createMarkdownWorker, serveMarkdown } from '../../src/cloudflare/worker.js';
+import {
+	type AssetsBinding,
+	createMarkdownWorker,
+	decorateResponse,
+	serveMarkdown,
+} from '../../src/cloudflare/worker.js';
 
 /** In-memory stand-in for the Workers static assets binding. */
 function createAssets(files: Record<string, { body: string; type: string }>, fallbackHtml = false) {
@@ -114,6 +119,39 @@ describe('createMarkdownWorker', () => {
 		const { assets } = createAssets({ '/style.css': { body: 'a{}', type: 'text/css' } });
 		const response = await worker.fetch(request('/style.css', '*/*'), { ASSETS: assets });
 		expect(response.headers.get('vary')).toBeNull();
+	});
+
+	it('adds a charset to text files and a canonical link to .md files', async () => {
+		const { assets } = createAssets({
+			...files,
+			'/llms.txt': { body: '# Site\n', type: 'text/plain' },
+			'/notes.md': { body: '# Notes\n', type: 'text/markdown; charset=iso-8859-1' },
+		});
+		const markdown = await worker.fetch(request('/docs/intro.md', '*/*'), { ASSETS: assets });
+		expect(markdown.headers.get('content-type')).toBe('text/markdown; charset=utf-8');
+		expect(markdown.headers.get('link')).toBe('<https://example.com/docs/intro/>; rel="canonical"');
+		expect(await markdown.text()).toBe('# Intro\n');
+
+		const home = await worker.fetch(request('/index.md', '*/*'), { ASSETS: assets });
+		expect(home.headers.get('link')).toBe('<https://example.com/>; rel="canonical"');
+
+		const llms = await worker.fetch(request('/llms.txt', '*/*'), { ASSETS: assets });
+		expect(llms.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+		expect(llms.headers.get('link')).toBeNull();
+
+		const declared = await worker.fetch(request('/notes.md', '*/*'), { ASSETS: assets });
+		expect(declared.headers.get('content-type')).toBe('text/markdown; charset=iso-8859-1');
+
+		const missing = await worker.fetch(request('/missing.md', '*/*'), { ASSETS: assets });
+		expect(missing.status).toBe(404);
+		expect(missing.headers.get('link')).toBeNull();
+	});
+
+	it('builds canonical links from the routing options', () => {
+		const response = new Response('# Intro\n', { headers: { 'content-type': 'text/markdown' } });
+		const options = { base: '/blog', outputPath: 'nested', trailingSlash: 'never' } as const;
+		const decorated = decorateResponse(request('/blog/intro/index.md'), response, options);
+		expect(decorated.headers.get('link')).toBe('<https://example.com/blog/intro>; rel="canonical"');
 	});
 
 	it('reports a missing binding', async () => {

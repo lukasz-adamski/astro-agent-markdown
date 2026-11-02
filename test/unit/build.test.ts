@@ -113,6 +113,7 @@ describe('writeCloudflareFiles', () => {
 			logger,
 		});
 		await expect(read('_headers')).rejects.toThrow();
+		expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('without `charset=utf-8`'));
 	});
 });
 

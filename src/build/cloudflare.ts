@@ -34,7 +34,12 @@ export async function writeCloudflareFiles({
 	if (cloudflare.headers && contentSignal) {
 		await appendBlock(new URL('_headers', dir), headersRule(contentSignal));
 	}
-	if (!cloudflare.worker) return;
+	if (!cloudflare.worker) {
+		logger.info(
+			'Cloudflare static assets serve .md and .txt files without `charset=utf-8`. See "Cloudflare without a Worker" in the README for the zone rules that add it.',
+		);
+		return;
+	}
 
 	if (!contentNegotiation) {
 		logger.warn('`cloudflare.worker` is ignored because `contentNegotiation` is disabled.');
@@ -54,6 +59,8 @@ export async function writeCloudflareFiles({
 		workerSource({
 			base: routing.base,
 			outputPath: routing.outputPath,
+			trailingSlash: routing.trailingSlash,
+			buildFormat: routing.buildFormat,
 			negotiation: cloudflare.negotiation,
 			contentSignal,
 		}),
@@ -62,8 +69,9 @@ export async function writeCloudflareFiles({
 }
 
 /**
- * Workers static assets already serve `.md` files as `text/markdown`. Setting
- * `Content-Type` here would also apply to the HTML 404 page of a missing file.
+ * Workers static assets serve `.md` files as `text/markdown`, without a
+ * charset. Setting `Content-Type` here would also apply to the HTML 404 page
+ * of a missing file; the Worker or a zone rule adds the charset instead.
  */
 function headersRule(contentSignal: string): string {
 	return [MARKER, '/*.md', `  Content-Signal: ${contentSignal}`].join('\n');

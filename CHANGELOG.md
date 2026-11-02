@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- The generated Cloudflare Worker adds `charset=utf-8` to `.md` and `.txt` files, which Workers static assets serve without one in production. Clients such as Python's `requests` decoded them as ISO-8859-1. Remove `!/*.md` from `run_worker_first` so `.md` files reach the Worker.
+- Markdown served at `.md` URLs by the Worker, the dev server and on-demand pages has a canonical `Link` header pointing to its page.
+- New `decorateResponse` export in `astro-agent-markdown/cloudflare` for existing Workers, and `trailingSlash` and `buildFormat` options for the canonical link.
+- With `cloudflare: { worker: false }`, the build log points to the zone rules that add the charset. The README lists them.
+
 ## 0.2.0
 
 This release changes the generated Markdown and `llms-full.txt`. Review the output of your pages after upgrading.
