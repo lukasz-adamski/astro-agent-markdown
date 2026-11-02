@@ -1,0 +1,88 @@
+{
+	"name": "astro-agent-markdown",
+	"version": "0.1.0",
+	"description": "Astro integration that serves a clean Markdown version of every page to AI agents: static .md files, content negotiation and llms.txt.",
+	"author": "Łukasz Adamski <eterprime@gmail.com>",
+	"license": "MIT",
+	"homepage": "https://github.com/lukasz-adamski/astro-agent-markdown#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/lukasz-adamski/astro-agent-markdown.git"
+	},
+	"bugs": {
+		"url": "https://github.com/lukasz-adamski/astro-agent-markdown/issues"
+	},
+	"keywords": [
+		"astro-integration",
+		"astro",
+		"withastro",
+		"markdown",
+		"llm",
+		"llms.txt",
+		"ai",
+		"agents",
+		"seo",
+		"cloudflare",
+		"workers"
+	],
+	"type": "module",
+	"sideEffects": false,
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./cloudflare": {
+			"types": "./dist/cloudflare/worker.d.ts",
+			"default": "./dist/cloudflare/worker.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist",
+		"CHANGELOG.md"
+	],
+	"scripts": {
+		"clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+		"build": "pnpm run clean && tsc -p tsconfig.build.json",
+		"typecheck": "tsc -p .",
+		"lint": "biome check .",
+		"format": "biome check --write .",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"prepublishOnly": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm test"
+	},
+	"engines": {
+		"node": ">=22.12.0"
+	},
+	"packageManager": "pnpm@10.24.0",
+	"peerDependencies": {
+		"astro": "^6.0.0 || ^7.0.0"
+	},
+	"dependencies": {
+		"@types/hast": "^3.0.5",
+		"hast-util-select": "^6.0.4",
+		"hast-util-to-string": "^3.0.1",
+		"picomatch": "^4.0.7",
+		"rehype-parse": "^9.0.1",
+		"rehype-remark": "^10.0.1",
+		"remark-gfm": "^4.0.1",
+		"remark-stringify": "^11.0.0",
+		"unified": "^11.0.5",
+		"unist-util-visit": "^5.1.0",
+		"vfile": "^6.0.3"
+	},
+	"devDependencies": {
+		"@astrojs/node": "^11.1.9",
+		"@biomejs/biome": "^2.6.2",
+		"@types/mdast": "^4.0.4",
+		"@types/node": "^26.6.5",
+		"@types/picomatch": "^4.0.3",
+		"astro": "^7.4.2",
+		"typescript": "^7.0.2",
+		"vitest": "^5.0.5"
+	},
+	"publishConfig": {
+		"access": "public"
+	}
+}

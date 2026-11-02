@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      astro:
+        patterns: ["astro", "@astrojs/*"]
+      unified:
+        patterns: ["unified", "rehype-*", "remark-*", "hast-*", "mdast-*", "unist-*", "vfile"]
+      dev-tools:
+        dependency-type: development
+        exclude-patterns: ["astro", "@astrojs/*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

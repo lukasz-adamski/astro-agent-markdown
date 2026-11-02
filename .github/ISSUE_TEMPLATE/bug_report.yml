@@ -1,0 +1,48 @@
+name: Bug report
+description: Something doesn't work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to report a bug. A minimal reproduction makes it much faster to fix.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: A link to a repository or StackBlitz project, or the smallest config and page that show the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Integration options
+      description: The options passed to `agentMarkdown()`.
+      render: js
+  - type: dropdown
+    id: context
+    attributes:
+      label: Where does it happen?
+      multiple: true
+      options:
+        - astro build (static output)
+        - astro dev
+        - On-demand rendered pages (adapter)
+        - Cloudflare Worker / _headers
+        - htmlToMarkdown()
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: astro-agent-markdown, Astro, adapter (if any) and Node.js.
+      placeholder: astro-agent-markdown 0.1.0, astro 7.4.2, @astrojs/node 11.1.9, Node.js 22.23.4
+    validations:
+      required: true

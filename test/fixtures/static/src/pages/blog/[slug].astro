@@ -1,0 +1,13 @@
+---
+import Layout from '../../layouts/Layout.astro';
+export function getStaticPaths() {
+	return [{ params: { slug: 'first-post' } }, { params: { slug: 'second-post' } }];
+}
+const { slug } = Astro.params;
+---
+<Layout title={`Post: ${slug}`}>
+	<article>
+		<h1>{slug}</h1>
+		<p>Body of {slug}. See <a href="../">all posts</a> and <img src="./cover.png" alt="Cover" />.</p>
+	</article>
+</Layout>
