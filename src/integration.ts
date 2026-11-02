@@ -3,7 +3,14 @@ import { writeCloudflareFiles } from './build/cloudflare.js';
 import { generateMarkdown } from './build/generate.js';
 import { createRequestHandler, type HandlerConfig } from './core/http.js';
 import { createDevMiddleware } from './dev/middleware.js';
-import { type AgentMarkdownOptions, hasConversionHooks, type ResolvedOptions, resolveOptions } from './options.js';
+import {
+	type AgentMarkdownOptions,
+	hasConversionHooks,
+	type LlmsTxtFile,
+	type ResolvedOptions,
+	resolveLlmsTxtFiles,
+	resolveOptions,
+} from './options.js';
 
 const NAME = 'astro-agent-markdown';
 const VIRTUAL_CONFIG = 'virtual:astro-agent-markdown/config';
@@ -19,6 +26,7 @@ export default function agentMarkdown(userOptions: AgentMarkdownOptions = {}): A
 	const options = resolveOptions(userOptions);
 	let config: AstroConfig | undefined;
 	let handlerConfig: HandlerConfig | undefined;
+	let llmsTxtFiles: LlmsTxtFile[] = [];
 	let buildOutput: 'static' | 'server' = 'static';
 	let markdownRoutes: RegExp[] = [];
 	let onDemandRoutes: RegExp[] = [];
@@ -52,6 +60,7 @@ export default function agentMarkdown(userOptions: AgentMarkdownOptions = {}): A
 				config = resolvedConfig;
 				buildOutput = output;
 				handlerConfig = createHandlerConfig(options, resolvedConfig);
+				llmsTxtFiles = resolveLlmsTxtFiles(options.llmsTxt, resolvedConfig.i18n);
 			},
 
 			'astro:routes:resolved': ({ routes }) => {
@@ -77,11 +86,13 @@ export default function agentMarkdown(userOptions: AgentMarkdownOptions = {}): A
 			},
 
 			'astro:build:done': async ({ dir, pages, logger }) => {
-				if (!handlerConfig) return;
+				if (!config || !handlerConfig) return;
 				await generateMarkdown({
 					dir,
+					root: config.root,
 					pathnames: pages.map((page) => page.pathname),
 					options,
+					llmsTxt: llmsTxtFiles,
 					routing: handlerConfig,
 					site: handlerConfig.site,
 					logger,

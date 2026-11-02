@@ -12,6 +12,8 @@ export interface PageMetadata {
 	image?: string;
 	/** Value of `<html lang>`. */
 	lang?: string;
+	/** Name of the site, from `og:site_name`. */
+	siteName?: string;
 	/** Contents of `<script type="application/ld+json">` blocks. */
 	jsonLd: string[];
 	/** The page opted out with `data-markdown-ignore` on `<html>` or `<body>`. */
@@ -43,6 +45,7 @@ export function extractMetadata(tree: Root, pageUrl: URL): PageMetadata {
 		url: resolveUrl(canonical ?? pageUrl.href, pageUrl),
 		image: image && resolveUrl(image, pageUrl),
 		lang,
+		siteName: firstContent(tree, ['meta[property="og:site_name"]']),
 		jsonLd: selectAll('script[type="application/ld+json"]', tree)
 			.map((script) => normalizeJson(hastToString(script)))
 			.filter((json) => json !== ''),

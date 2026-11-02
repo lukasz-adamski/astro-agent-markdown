@@ -16,6 +16,10 @@ export const DEFAULT_REMOVE_SELECTORS = [
 	'canvas',
 	'svg',
 	'img[src^="data:"]',
+	// Decorative images: an empty `alt` marks an image as decorative
+	'img[alt=""]',
+	'img[role="presentation"]',
+	'img[role="none"]',
 	// Site chrome and interactive controls
 	'nav',
 	'body > header',
@@ -30,11 +34,26 @@ export const DEFAULT_REMOVE_SELECTORS = [
 	'select',
 	'textarea',
 	'dialog',
-	// Hidden and assistive-only content
+	// Skip links: in-page links shown only to screen readers
+	'a.sr-only[href^="#"]',
+	'a.visually-hidden[href^="#"]',
+	'.skip-link',
+	// Content hidden from every reader
 	'[hidden]',
 	'[aria-hidden="true"]',
-	'.sr-only',
-	'.visually-hidden',
 	// Explicit opt-out
 	'[data-markdown-ignore]',
+];
+
+/** Elements that are removed even when they match a keep selector. */
+const HIDDEN = '[hidden], [aria-hidden="true"], [data-markdown-ignore]';
+
+/**
+ * Elements exempt from removal: buttons whose text labels content, such as
+ * accordion and tab triggers or disclosure buttons inside headings.
+ */
+export const DEFAULT_KEEP_SELECTORS = [
+	`:is(h1, h2, h3, h4, h5, h6) button:not(${HIDDEN})`,
+	`button[aria-expanded]:not(${HIDDEN})`,
+	`button[role="tab"]:not(${HIDDEN})`,
 ];

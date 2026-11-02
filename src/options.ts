@@ -1,9 +1,11 @@
+import type { AstroConfig } from 'astro';
 import { z } from 'astro/zod';
 import { selectAll } from 'hast-util-select';
 import type { Options as StringifyOptions } from 'remark-stringify';
 import type { PluggableList } from 'unified';
 import type { PageMetadata } from './core/metadata.js';
-import { DEFAULT_CONTENT_SELECTORS, DEFAULT_REMOVE_SELECTORS } from './core/selectors.js';
+import { normalizePathname } from './core/routing.js';
+import { DEFAULT_CONTENT_SELECTORS, DEFAULT_KEEP_SELECTORS, DEFAULT_REMOVE_SELECTORS } from './core/selectors.js';
 
 /** Metadata fields that can be emitted as YAML frontmatter. */
 export type FrontmatterField = 'title' | 'description' | 'url' | 'image' | 'lang';
@@ -42,22 +44,155 @@ export interface ContentSignal {
 	aiInput?: boolean;
 }
 
+export interface LlmsTxtSection {
+	/** Heading of the section. */
+	title: string;
+	/** Glob patterns of the pages listed in this section. */
+	include: string[];
+	/** Glob patterns of pages left out of this section. */
+	exclude?: string[];
+}
+
+/** A page listed in `llms.txt`. */
+export interface LlmsTxtPage {
+	/** Route pathname of the page, without `base`. */
+	pathname: string;
+	/** URL of the Markdown file. */
+	href: string;
+	metadata: PageMetadata;
+}
+
+/** How a page is listed in `llms.txt`. Omitted fields keep their defaults. */
+export interface LlmsTxtEntry {
+	/** Link text. */
+	label?: string;
+	/** Text after the link. `false` leaves it out. */
+	description?: string | false;
+}
+
+export interface LlmsFullTxtOptions {
+	/**
+	 * What starts each page: `'source'` writes its `# Title` and a `Source:`
+	 * line with its URL, `'frontmatter'` its YAML frontmatter.
+	 * @default 'source'
+	 */
+	pageHeader?: 'source' | 'frontmatter';
+	/**
+	 * Include the pages of the `Optional` section.
+	 * @default false
+	 */
+	optional?: boolean;
+	/**
+	 * Remove boilerplate repeated across pages, such as calls to action: a
+	 * top-level block found on at least `minShare` of the pages, and on at least
+	 * `minPages` pages, stays only on the first page that has it. Repeats within
+	 * a page and `**term**: details` facts are kept.
+	 * @default false
+	 */
+	dedupe?: boolean | { minShare?: number; minPages?: number };
+	/**
+	 * Warn when the file is larger than this many bytes. `false` disables the warning.
+	 * @default 512000
+	 */
+	maxSize?: number | false;
+}
+
 export interface LlmsTxtOptions {
-	/** Top-level heading. Defaults to the title of the home page. */
+	/**
+	 * Location of the index, e.g. `/en/llms.txt` for one locale. `llms-full.txt`
+	 * is written next to it, and the page in its directory is the home page.
+	 * @default '/llms.txt'
+	 */
+	path?: string;
+	/**
+	 * One file per locale of Astro's `i18n` config: `/llms.txt` for the default
+	 * locale, `/<locale>/llms.txt` for the others. Other options apply to each;
+	 * patterns and pathnames such as `sectionOrder` and `optional` match full
+	 * pathnames, so set them per locale. Pass an object keyed by locale to
+	 * override options for some locales.
+	 * @default false
+	 * @example { en: { introFile: './src/llms-intro.en.md' }, de: { introFile: './src/llms-intro.de.md' } }
+	 */
+	locales?: boolean | Record<string, LlmsTxtLocaleOptions>;
+	/**
+	 * Glob patterns of the pages listed, matched like the top-level `include`.
+	 * @default ['**']
+	 */
+	include?: string[];
+	/** Glob patterns of pages left out of this index. */
+	exclude?: string[];
+	/**
+	 * Top-level heading. Defaults to the site name: `og:site_name` of the home
+	 * page, or the suffix shared by page titles, such as `Acme` in `About | Acme`.
+	 */
 	title?: string;
 	/** Short summary rendered as a blockquote. Defaults to the description of the home page. */
 	description?: string;
 	/**
-	 * Also emit `llms-full.txt` containing the Markdown of every page.
+	 * Markdown inserted after the summary, before the links: facts, rules,
+	 * contact. A leading frontmatter block, `# heading` and blockquote are skipped.
+	 */
+	intro?: string;
+	/**
+	 * Markdown file inserted like `intro`, relative to the project root.
+	 * @example './src/llms-intro.md'
+	 */
+	introFile?: string;
+	/**
+	 * Group pages under `##` headings. A page goes to the first section that
+	 * matches; the others are listed under `## Pages`, before the sections.
+	 * `'auto'` makes a section of every first path segment with subpages.
+	 */
+	sections?: LlmsTxtSection[] | 'auto';
+	/**
+	 * Order of automatic sections, as the pathnames of their pages. Sections
+	 * not listed follow in path order.
+	 * @example ['/docs', '/blog']
+	 */
+	sectionOrder?: string[];
+	/**
+	 * Glob patterns of secondary pages, such as legal pages, listed last under
+	 * `## Optional`, which agents may skip.
+	 * @example ['/privacy', '/terms']
+	 */
+	optional?: string[];
+	/**
+	 * Name of the language in the links between index files. Defaults to the
+	 * `lang` of the home page, written in that language.
+	 */
+	language?: string;
+	/**
+	 * With several index files, link each to the others under `## Other languages`.
+	 * @default true
+	 */
+	crossLinks?: boolean;
+	/**
+	 * Decides how a page is listed. Return `false` to leave it out of the index
+	 * while keeping it in `llms-full.txt`.
+	 */
+	entry?: (page: LlmsTxtPage) => LlmsTxtEntry | false | undefined;
+	/**
+	 * Write the index. Disable it to keep a hand-written `llms.txt` and only
+	 * generate `llms-full.txt`.
+	 * @default true
+	 */
+	index?: boolean;
+	/**
+	 * Also emit `llms-full.txt` containing the Markdown of every listed page,
+	 * without JSON-LD, in the order of the index.
 	 * @default false
 	 */
-	full?: boolean;
+	full?: boolean | LlmsFullTxtOptions;
 }
+
+/** Options overriding the shared `llmsTxt` options for one locale. */
+export type LlmsTxtLocaleOptions = Omit<LlmsTxtOptions, 'path' | 'locales' | 'include'>;
 
 export interface CloudflareOptions {
 	/**
-	 * Add a `_headers` rule serving `.md` files as `text/markdown; charset=utf-8`,
-	 * with the `contentSignal` header when configured.
+	 * Add a `_headers` rule setting `Content-Signal` on `.md` files when
+	 * `contentSignal` is configured. Workers static assets already serve them
+	 * as `text/markdown; charset=utf-8`.
 	 * @default true
 	 */
 	headers?: boolean;
@@ -102,7 +237,7 @@ export interface AgentMarkdownOptions {
 	include?: string[];
 	/**
 	 * Glob patterns of pages that never get a Markdown version.
-	 * `/404` and `/500` are always excluded.
+	 * Error pages (`/404`, `/500`, `/en/404`, …) are always excluded.
 	 * @example ['/admin/**', '/tags/*']
 	 */
 	exclude?: string[];
@@ -118,8 +253,15 @@ export interface AgentMarkdownOptions {
 	 */
 	removeSelectors?: string[];
 	/**
-	 * Keep the built-in list of removed elements (scripts, navigation, forms,
-	 * hidden elements, `[data-markdown-ignore]`, …).
+	 * Additional CSS selectors of elements that are never removed, even when
+	 * they match a removal selector. Their descendants can still be removed.
+	 * @example ['.cta button']
+	 */
+	keepSelectors?: string[];
+	/**
+	 * Keep the built-in lists of removed elements (scripts, navigation, forms,
+	 * hidden elements, `[data-markdown-ignore]`, …) and of kept ones (buttons
+	 * labelling headings, accordions and tabs).
 	 * @default true
 	 */
 	defaultRemoveSelectors?: boolean;
@@ -143,7 +285,8 @@ export interface AgentMarkdownOptions {
 	/** Markdown formatting options (bullet style, emphasis marker, fences, …). */
 	markdown?: MarkdownFormatOptions;
 	/**
-	 * Rehype plugins run on the cleaned HTML tree before conversion.
+	 * Rehype plugins run on the main content, after elements are removed and
+	 * markup is normalized, before conversion.
 	 * Applied at build time and in dev, not by the on-demand middleware.
 	 */
 	rehypePlugins?: PluggableList;
@@ -173,11 +316,12 @@ export interface AgentMarkdownOptions {
 	 */
 	alternateLink?: boolean;
 	/**
-	 * Generate an `llms.txt` index of all Markdown pages at build time.
+	 * Generate an `llms.txt` index of all Markdown pages at build time. Pass an
+	 * array for several indexes, e.g. one per locale.
 	 * @see https://llmstxt.org
 	 * @default false
 	 */
-	llmsTxt?: boolean | LlmsTxtOptions;
+	llmsTxt?: boolean | LlmsTxtOptions | LlmsTxtOptions[];
 	/**
 	 * Serve Markdown when the request `Accept` header prefers `text/markdown`
 	 * over `text/html`. Applies to the dev server, on-demand rendered pages and
@@ -212,6 +356,7 @@ export interface AgentMarkdownOptions {
 export interface ConversionOptions {
 	contentSelectors: string[];
 	removeSelectors: string[];
+	keepSelectors: string[];
 	frontmatter: FrontmatterField[];
 	jsonLd: boolean;
 	absoluteUrls: boolean;
@@ -225,6 +370,39 @@ export interface ConversionHooks {
 	transform?: MarkdownTransform;
 }
 
+export interface ResolvedLlmsFullTxt {
+	pageHeader: 'source' | 'frontmatter';
+	optional: boolean;
+	dedupe: { minShare: number; minPages: number } | null;
+	maxSize: number | null;
+}
+
+/** Options of one `llmsTxt` file, with defaults. */
+export interface ResolvedLlmsTxtEntry
+	extends Required<Pick<LlmsTxtOptions, 'include' | 'exclude' | 'optional' | 'sectionOrder' | 'crossLinks' | 'index'>>,
+		Pick<LlmsTxtOptions, 'path' | 'title' | 'description' | 'intro' | 'introFile' | 'language' | 'entry'> {
+	sections: LlmsTxtSection[] | 'auto';
+	full: ResolvedLlmsFullTxt | null;
+}
+
+/** `llmsTxt` options with defaults, before `locales` is expanded. */
+export interface ResolvedLlmsTxt extends ResolvedLlmsTxtEntry {
+	locales: boolean;
+	/** Options of the locales with overrides, by locale key. */
+	localeOptions: Record<string, ResolvedLlmsTxtEntry>;
+}
+
+/** One index file to write. */
+export interface LlmsTxtFile extends Omit<ResolvedLlmsTxtEntry, 'path'> {
+	path: string;
+	/** Location of `llms-full.txt`. */
+	fullPath: string;
+	/** Pathname of the page whose metadata provides the defaults. */
+	home: string;
+	/** Locale code from the `i18n` config, which names the file's language. */
+	locale?: string;
+}
+
 export interface ResolvedOptions {
 	include: string[];
 	exclude: string[];
@@ -232,7 +410,7 @@ export interface ResolvedOptions {
 	hooks: ConversionHooks;
 	outputPath: 'sibling' | 'nested';
 	alternateLink: boolean;
-	llmsTxt: LlmsTxtOptions | null;
+	llmsTxt: ResolvedLlmsTxt[];
 	contentNegotiation: boolean;
 	contentSignal: string | null;
 	cloudflare: Required<CloudflareOptions> | null;
@@ -243,7 +421,8 @@ export const DEFAULT_FRONTMATTER: FrontmatterField[] = ['title', 'description', 
 
 export const DEFAULT_MARKDOWN_FORMAT: MarkdownFormatOptions = { bullet: '-', rule: '-' };
 
-const ALWAYS_EXCLUDED = ['/404', '/500'];
+/** Error pages, including localized ones such as `/en/404`. */
+const ALWAYS_EXCLUDED = ['/404', '/500', '/*/404', '/*/500'];
 
 const fn = <T>() => z.custom<T>((value) => typeof value === 'function', 'Expected a function');
 const pluggableList = z.custom<PluggableList>(Array.isArray, 'Expected an array of plugins');
@@ -252,7 +431,68 @@ const headerValue = z
 	.regex(/^[\x20-\x7e]+$/, 'Expected printable ASCII characters only (a valid HTTP header value)');
 const selector = z
 	.string()
-	.refine(isValidSelector, { error: (issue) => `Invalid CSS selector: ${String(issue.input)}` });
+	.refine(isValidSelector, { error: (issue) => `Invalid CSS selector: ${String(issue.input)}` })
+	.refine((value) => !hasComplexArgument(value), {
+		error: (issue) =>
+			`Unsupported CSS selector: ${String(issue.input)}. Only compound selectors (without spaces, \`>\`, \`+\` or \`~\`) work inside :not() and :is().`,
+	});
+const globs = z.array(z.string());
+const llmsTxtFields = {
+	path: z
+		.string()
+		.regex(/^\/(?:[^/\s]+\/)*[^/\s]+\.txt$/, 'Expected an absolute path to a .txt file, e.g. /en/llms.txt')
+		.refine((path) => !/\/\.{1,2}\//.test(path), 'Expected a path without `.` or `..` segments'),
+	include: globs,
+	exclude: globs,
+	title: z.string(),
+	description: z.string(),
+	intro: z.string(),
+	introFile: z.string().min(1),
+	sections: z.union([
+		z.literal('auto'),
+		z.array(z.object({ title: z.string().min(1), include: globs, exclude: globs.optional() }).strict()),
+	]),
+	sectionOrder: globs,
+	optional: globs,
+	language: z.string().min(1),
+	crossLinks: z.boolean(),
+	entry: fn<NonNullable<LlmsTxtOptions['entry']>>(),
+	index: z.boolean(),
+	full: z.union([
+		z.boolean(),
+		z
+			.object({
+				pageHeader: z.enum(['source', 'frontmatter']),
+				optional: z.boolean(),
+				dedupe: z.union([
+					z.boolean(),
+					z
+						.object({ minShare: z.number().gt(0).max(1), minPages: z.number().int().min(2) })
+						.partial()
+						.strict(),
+				]),
+				maxSize: z.union([z.literal(false), z.number().int().positive()]),
+			})
+			.partial()
+			.strict(),
+	]),
+};
+const introSource = {
+	error: 'Use either `intro` or `introFile`.',
+};
+const hasOneIntro = (value: { intro?: string; introFile?: string }) =>
+	!(value.intro !== undefined && value.introFile !== undefined);
+const { path: _path, include: _include, ...localeFields } = llmsTxtFields;
+const llmsTxtLocaleOptions = z.object(localeFields).partial().strict().refine(hasOneIntro, introSource);
+const llmsTxtOptions = z
+	.object({ ...llmsTxtFields, locales: z.union([z.boolean(), z.record(z.string(), llmsTxtLocaleOptions)]) })
+	.partial()
+	.strict()
+	.refine((value) => !(value.locales && (value.path || value.include || value.language)), {
+		error: '`locales` sets `path`, `include` and `language` for each locale; remove them.',
+	})
+	.refine(hasOneIntro, introSource);
+
 const frontmatterField = z.enum(['title', 'description', 'url', 'image', 'lang']);
 
 const optionsSchema = z
@@ -261,6 +501,7 @@ const optionsSchema = z
 		exclude: z.array(z.string()),
 		contentSelector: z.union([selector, z.array(selector).min(1)]),
 		removeSelectors: z.array(selector),
+		keepSelectors: z.array(selector),
 		defaultRemoveSelectors: z.boolean(),
 		frontmatter: z.union([z.boolean(), z.array(frontmatterField)]),
 		jsonLd: z.boolean(),
@@ -291,10 +532,7 @@ const optionsSchema = z
 		transform: fn<MarkdownTransform>(),
 		outputPath: z.enum(['sibling', 'nested']),
 		alternateLink: z.boolean(),
-		llmsTxt: z.union([
-			z.boolean(),
-			z.object({ title: z.string(), description: z.string(), full: z.boolean() }).partial().strict(),
-		]),
+		llmsTxt: z.union([z.boolean(), llmsTxtOptions, z.array(llmsTxtOptions).min(1)]),
 		contentNegotiation: z.boolean(),
 		contentSignal: z.union([
 			z.literal(false),
@@ -322,15 +560,14 @@ export function resolveOptions(options: AgentMarkdownOptions = {}): ResolvedOpti
 		throw new Error(`[astro-agent-markdown] Invalid options:\n${describeIssues(result.error.issues).join('\n')}`);
 	}
 
+	const defaults = options.defaultRemoveSelectors !== false;
 	return {
 		include: options.include ?? ['**'],
 		exclude: [...ALWAYS_EXCLUDED, ...(options.exclude ?? [])],
 		conversion: {
 			contentSelectors: toArray(options.contentSelector ?? DEFAULT_CONTENT_SELECTORS),
-			removeSelectors: [
-				...(options.defaultRemoveSelectors === false ? [] : DEFAULT_REMOVE_SELECTORS),
-				...(options.removeSelectors ?? []),
-			],
+			removeSelectors: [...(defaults ? DEFAULT_REMOVE_SELECTORS : []), ...(options.removeSelectors ?? [])],
+			keepSelectors: [...(defaults ? DEFAULT_KEEP_SELECTORS : []), ...(options.keepSelectors ?? [])],
 			frontmatter: resolveFrontmatter(options.frontmatter),
 			jsonLd: options.jsonLd ?? true,
 			absoluteUrls: options.absoluteUrls ?? true,
@@ -373,6 +610,30 @@ function isValidSelector(value: string): boolean {
 	}
 }
 
+/**
+ * hast-util-select silently mismatches complex selectors inside `:not()` and
+ * `:is()`: `button:not(h2 button)` matches every button.
+ */
+function hasComplexArgument(value: string): boolean {
+	const source = value.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""');
+	for (const match of source.matchAll(/:(?:not|is)\(/g)) {
+		let depth = 0;
+		let brackets = 0;
+		let compound = '';
+		for (const char of source.slice((match.index ?? 0) + match[0].length)) {
+			if (char === '[') brackets++;
+			else if (char === ']') brackets--;
+			else if (char === '(') depth++;
+			else if (char === ')' && depth-- === 0) break;
+			if (depth > 0 || brackets > 0) continue;
+			if (char === ',') compound = '';
+			else compound += char;
+			if (/[>+~]/.test(char) || /\S\s+\S/.test(compound)) return true;
+		}
+	}
+	return false;
+}
+
 function toArray<T>(value: T | T[]): T[] {
 	return Array.isArray(value) ? value : [value];
 }
@@ -383,9 +644,112 @@ function resolveFrontmatter(value: AgentMarkdownOptions['frontmatter']): Frontma
 	return [...new Set(value)];
 }
 
-function resolveLlmsTxt(value: AgentMarkdownOptions['llmsTxt']): LlmsTxtOptions | null {
+function resolveLlmsTxt(value: AgentMarkdownOptions['llmsTxt']): ResolvedLlmsTxt[] {
+	if (!value) return [];
+	const resolved = toArray(value === true ? {} : value).map(({ locales, ...options }, index) => {
+		const path = Array.isArray(value) ? `llmsTxt.${index}` : 'llmsTxt';
+		return {
+			...resolveLlmsTxtEntry(options, path),
+			locales: Boolean(locales),
+			localeOptions: Object.fromEntries(
+				Object.entries(typeof locales === 'object' ? locales : {}).map(([key, overrides]) => {
+					// An intro set for the locale replaces the shared one, whichever option sets it.
+					const shared = 'intro' in overrides || 'introFile' in overrides ? omitIntro(options) : options;
+					return [key, resolveLlmsTxtEntry({ ...shared, ...overrides }, `${path}.locales.${key}`)];
+				}),
+			),
+		};
+	});
+	// Without `locales`, file paths are known now: report duplicates early.
+	if (!resolved.some((entry) => entry.locales)) resolveLlmsTxtFiles(resolved, undefined);
+	return resolved;
+}
+
+/** Resolves the options of one file; `path` names them in errors. */
+function resolveLlmsTxtEntry(
+	{ full, ...options }: Omit<LlmsTxtOptions, 'locales'>,
+	path: string,
+): ResolvedLlmsTxtEntry {
+	// Checked after locale overrides are merged, as `sections` may come from the shared options.
+	if (options.sectionOrder?.length && options.sections !== 'auto') {
+		throw invalid(
+			`${path}.sectionOrder`,
+			"needs `sections: 'auto'`. Explicit sections are listed in the order they are given.",
+		);
+	}
+	return {
+		...options,
+		include: options.include ?? ['**'],
+		exclude: options.exclude ?? [],
+		sections: options.sections ?? [],
+		sectionOrder: options.sectionOrder ?? [],
+		optional: options.optional ?? [],
+		crossLinks: options.crossLinks ?? true,
+		index: options.index ?? true,
+		full: resolveLlmsFullTxt(full),
+	};
+}
+
+function omitIntro<T extends Pick<LlmsTxtOptions, 'intro' | 'introFile'>>({ intro, introFile, ...rest }: T) {
+	return rest;
+}
+
+function resolveLlmsFullTxt(value: LlmsTxtOptions['full']): ResolvedLlmsFullTxt | null {
 	if (!value) return null;
-	return value === true ? {} : value;
+	const { pageHeader = 'source', optional = false, dedupe = false, maxSize = 512_000 } = value === true ? {} : value;
+	const { minShare = 0.5, minPages = 3 } = dedupe === true ? {} : dedupe || {};
+	return { pageHeader, optional, dedupe: dedupe ? { minShare, minPages } : null, maxSize: maxSize || null };
+}
+
+/**
+ * Resolves the index files to write, one per locale for `locales: true`.
+ * Throws when two of them share a path.
+ */
+export function resolveLlmsTxtFiles(entries: ResolvedLlmsTxt[], i18n: AstroConfig['i18n']): LlmsTxtFile[] {
+	const files = entries.flatMap(({ locales, path, localeOptions, ...shared }): LlmsTxtFile[] => {
+		if (!locales) return [{ ...shared, ...filePaths(path ?? '/llms.txt') }];
+		if (!i18n) throw invalid('llmsTxt.locales', 'needs the `i18n` option of the Astro config.');
+
+		const prefixDefaultLocale = typeof i18n.routing === 'object' && i18n.routing.prefixDefaultLocale;
+		const all = i18n.locales.map((locale) =>
+			typeof locale === 'string'
+				? { prefix: locale, code: locale, keys: [locale] }
+				: { prefix: locale.path, code: locale.codes[0], keys: [locale.path, ...locale.codes] },
+		);
+		const keys = all.flatMap((locale) => locale.keys);
+		const unknown = Object.keys(localeOptions).find((key) => !keys.includes(key));
+		if (unknown) {
+			throw invalid(
+				`llmsTxt.locales.${unknown}`,
+				`is not a locale of the \`i18n\` config. Use one of: ${keys.join(', ')}.`,
+			);
+		}
+
+		return all.map(({ prefix, code, keys }) => {
+			const others = all.filter((other) => other.prefix !== prefix).map((other) => `/${other.prefix}/**`);
+			const entry = keys.map((key) => localeOptions[key]).find(Boolean) ?? shared;
+			const base = { ...entry, locale: code, include: [`/${prefix}/**`] };
+			if (prefix !== i18n.defaultLocale) return { ...base, ...filePaths(`/${prefix}/llms.txt`) };
+			if (prefixDefaultLocale) return { ...base, ...filePaths('/llms.txt'), home: `/${prefix}` };
+			return { ...base, ...filePaths('/llms.txt'), include: entry.include, exclude: [...others, ...entry.exclude] };
+		});
+	});
+
+	const paths = files.flatMap((file) => [file.path, ...(file.full ? [file.fullPath] : [])]);
+	const duplicate = paths.find((path, index) => paths.indexOf(path) !== index);
+	if (duplicate) throw invalid('llmsTxt', `${duplicate} is generated twice.`);
+	return files;
+}
+
+/** `/en/llms.txt` → `/en/llms-full.txt`, home page `/en` */
+function filePaths(path: string): Pick<LlmsTxtFile, 'path' | 'fullPath' | 'home'> {
+	const directory = path.slice(0, path.lastIndexOf('/') + 1);
+	const name = path.slice(directory.length, -'.txt'.length);
+	return { path, fullPath: `${directory}${name}-full.txt`, home: normalizePathname(directory) };
+}
+
+function invalid(path: string, message: string): Error {
+	return new Error(`[astro-agent-markdown] Invalid options:\n  - ${path}: ${message}`);
 }
 
 function resolveCloudflare(value: AgentMarkdownOptions['cloudflare']): Required<CloudflareOptions> | null {

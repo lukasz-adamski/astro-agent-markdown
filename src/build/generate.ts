@@ -7,14 +7,17 @@ import { createPageFilter } from '../core/filter.js';
 import type { PageMetadata } from '../core/metadata.js';
 import { normalizePathname, type RoutingConfig, toMarkdownPath, toPagePath, withBase } from '../core/routing.js';
 import { createPageUrl } from '../core/urls.js';
-import type { ResolvedOptions } from '../options.js';
-import { createLlmsFullTxt, createLlmsTxt } from './llms-txt.js';
+import type { LlmsTxtFile, ResolvedOptions } from '../options.js';
+import { createLlmsFullTxt, createLlmsTxt, languageLabels, normalizeIntro, planLlmsTxt } from './llms-txt.js';
 
 export interface GenerateOptions {
 	/** Directory containing the generated HTML (`dir` of `astro:build:done`). */
 	dir: URL;
+	/** Project root, for `llmsTxt.introFile`. */
+	root: URL;
 	pathnames: string[];
 	options: ResolvedOptions;
+	llmsTxt: LlmsTxtFile[];
 	routing: RoutingConfig;
 	site: string | undefined;
 	logger: AstroIntegrationLogger;
@@ -27,15 +30,23 @@ export interface GeneratedPage {
 	href: string;
 	markdown: string;
 	metadata: PageMetadata;
+	/** Frontmatter block included in `markdown`, empty when disabled. */
+	frontmatter: string;
+	/** JSON-LD block included in `markdown`, empty when disabled. */
+	jsonLd: string;
 }
 
 const CONCURRENCY = 16;
+/** Pages named in a warning before it is shortened. */
+const LISTED_IN_WARNINGS = 5;
 
 /** Writes a Markdown file next to every eligible HTML page of a build. */
 export async function generateMarkdown({
 	dir,
+	root,
 	pathnames,
 	options,
+	llmsTxt,
 	routing,
 	site,
 	logger,
@@ -57,29 +68,16 @@ export async function generateMarkdown({
 	});
 	const pages = results.filter((page): page is GeneratedPage => page !== null);
 
-	if (options.llmsTxt) {
-		await writeNewFile(new URL('llms.txt', dir), createLlmsTxt(pages, options.llmsTxt, site));
-		if (options.llmsTxt.full) await writeNewFile(new URL('llms-full.txt', dir), createLlmsFullTxt(pages));
-	}
+	const written = await writeLlmsTxt({ dir, root, files: llmsTxt, pages, routing, site, logger });
 
 	const skipped = candidates.length - pages.length - failed;
 	const details = [skipped && `${skipped} skipped`, failed && `${failed} failed`].filter(Boolean).join(', ');
 	logger.info(
 		`Generated ${pages.length} Markdown ${pages.length === 1 ? 'page' : 'pages'}` +
-			`${details ? ` (${details})` : ''} in ${Math.round(performance.now() - start)}ms.`,
+			`${details ? ` (${details})` : ''} in ${Math.round(performance.now() - start)}ms` +
+			`${written.length ? `, wrote ${written.join(', ')}` : ''}.`,
 	);
 	return pages;
-
-	/** Writes `file` unless it already exists, e.g. copied from `public/`. */
-	async function writeNewFile(file: URL, content: string): Promise<boolean> {
-		if (await isFile(file)) {
-			logger.warn(`Skipped ${fileURLToPath(file)}: the file already exists.`);
-			return false;
-		}
-		await mkdir(dirname(fileURLToPath(file)), { recursive: true });
-		await writeFile(file, content);
-		return true;
-	}
 
 	async function generatePage(pathname: string): Promise<GeneratedPage | null> {
 		const found = await findHtmlFile(dir, pathname);
@@ -94,7 +92,7 @@ export async function generateMarkdown({
 		if (!page) return null;
 
 		const markdownPath = toMarkdownPath(pathname, routing.outputPath);
-		if (!(await writeNewFile(new URL(`.${markdownPath}`, dir), page.markdown))) return null;
+		if (!(await writeNewFile(new URL(`.${markdownPath}`, dir), page.markdown, logger))) return null;
 
 		const href = withBase(markdownPath, routing.base);
 		if (options.alternateLink) {
@@ -102,13 +100,120 @@ export async function generateMarkdown({
 			if (updated) await writeFile(htmlFile, updated);
 		}
 
-		return {
-			pathname,
-			href: site ? new URL(href, site).href : href,
-			markdown: page.markdown,
-			metadata: page.metadata,
-		};
+		return { pathname, href: publicUrl(href, site), ...page };
 	}
+}
+
+interface WriteLlmsTxtOptions extends Pick<GenerateOptions, 'dir' | 'root' | 'routing' | 'site' | 'logger'> {
+	files: LlmsTxtFile[];
+	pages: GeneratedPage[];
+}
+
+/**
+ * Writes the `llms.txt` and `llms-full.txt` files and warns about likely
+ * configuration mistakes.
+ * @returns A summary of each written file, such as `llms.txt (46 pages, 11 KB)`.
+ */
+async function writeLlmsTxt({
+	dir,
+	root,
+	files,
+	pages,
+	routing,
+	site,
+	logger,
+}: WriteLlmsTxtOptions): Promise<string[]> {
+	const plans = files.map((file) => planLlmsTxt(pages, file, site));
+	const indexes = plans.filter((plan) => plan.file.index);
+	const languages = languageLabels(indexes);
+	const written: string[] = [];
+
+	for (const plan of plans) {
+		const { file } = plan;
+		const name = file.path.slice(1);
+		for (const warning of plan.warnings) logger.warn(`${name}: ${warning}`);
+
+		if (file.index) {
+			const listed = plan.sections.flatMap((section) => section.pages).filter((entry) => !entry.hidden);
+			const undescribed = listed.filter((entry) => !entry.description).length;
+			if (undescribed) {
+				logger.warn(`${name}: ${undescribed} of ${listed.length} pages are listed without a description.`);
+			}
+			const alternates = file.crossLinks
+				? indexes.flatMap((other, index) =>
+						other === plan
+							? []
+							: [{ label: languages[index] as string, href: publicUrl(withBase(other.file.path, routing.base), site) }],
+					)
+				: [];
+			const content = createLlmsTxt(plan, await readIntro(file, root), alternates);
+			if (await writeNewFile(new URL(`.${file.path}`, dir), content, logger)) {
+				written.push(`${name} (${listed.length} ${listed.length === 1 ? 'page' : 'pages'}, ${formatSize(content)})`);
+			}
+		}
+
+		if (file.full) {
+			const full = createLlmsFullTxt(plan, file.full);
+			const size = Buffer.byteLength(full.content);
+			if (file.full.maxSize && size > file.full.maxSize) {
+				const largest = [...full.pages]
+					.sort((a, b) => b.bytes - a.bytes)
+					.slice(0, LISTED_IN_WARNINGS)
+					.map((page) => `${page.pathname} (${formatSize(page.bytes)})`);
+				logger.warn(
+					`${file.fullPath.slice(1)} is ${formatSize(size)}, above \`maxSize\` (${formatSize(file.full.maxSize)}). ` +
+						`Largest pages: ${largest.join(', ')}.`,
+				);
+			}
+			if (await writeNewFile(new URL(`.${file.fullPath}`, dir), full.content, logger)) {
+				written.push(`${file.fullPath.slice(1)} (${formatSize(size)})`);
+			}
+		}
+	}
+
+	if (files.length > 1) {
+		const listed = new Set(
+			plans.flatMap((plan) => plan.sections.flatMap((section) => section.pages.map((e) => e.page))),
+		);
+		const missing = pages.filter((page) => !listed.has(page)).map((page) => page.pathname);
+		if (missing.length) {
+			const shown = missing.slice(0, LISTED_IN_WARNINGS).join(', ');
+			const more = missing.length > LISTED_IN_WARNINGS ? ` and ${missing.length - LISTED_IN_WARNINGS} more` : '';
+			logger.warn(`${missing.length} pages are in no llms.txt file: ${shown}${more}.`);
+		}
+	}
+	return written;
+}
+
+async function readIntro(file: LlmsTxtFile, root: URL): Promise<string | undefined> {
+	if (!file.introFile) return file.intro && normalizeIntro(file.intro);
+	const path = fileURLToPath(new URL(file.introFile, root));
+	const markdown = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
+		throw new Error(
+			`[astro-agent-markdown] Could not read \`llmsTxt.introFile\` ${path}: ${error.code ?? error.message}`,
+		);
+	});
+	return normalizeIntro(markdown);
+}
+
+/** Writes `file` unless it already exists, e.g. copied from `public/`. */
+async function writeNewFile(file: URL, content: string, logger: AstroIntegrationLogger): Promise<boolean> {
+	if (await isFile(file)) {
+		logger.warn(`Skipped ${fileURLToPath(file)}: the file already exists.`);
+		return false;
+	}
+	await mkdir(dirname(fileURLToPath(file)), { recursive: true });
+	await writeFile(file, content);
+	return true;
+}
+
+function publicUrl(path: string, site: string | undefined): string {
+	return site ? new URL(path, site).href : path;
+}
+
+function formatSize(content: string | number): string {
+	const bytes = typeof content === 'number' ? content : Buffer.byteLength(content);
+	return bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024)} KB`;
 }
 
 /**

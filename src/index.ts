@@ -5,14 +5,19 @@ import { type AgentMarkdownOptions, resolveOptions } from './options.js';
 export type { MarkdownPage } from './core/converter.js';
 export type { PageMetadata } from './core/metadata.js';
 export { prefersMarkdown } from './core/negotiation.js';
-export { DEFAULT_CONTENT_SELECTORS, DEFAULT_REMOVE_SELECTORS } from './core/selectors.js';
+export { DEFAULT_CONTENT_SELECTORS, DEFAULT_KEEP_SELECTORS, DEFAULT_REMOVE_SELECTORS } from './core/selectors.js';
 export { default } from './integration.js';
 export type {
 	AgentMarkdownOptions,
 	CloudflareOptions,
 	ContentSignal,
 	FrontmatterField,
+	LlmsFullTxtOptions,
+	LlmsTxtEntry,
+	LlmsTxtLocaleOptions,
 	LlmsTxtOptions,
+	LlmsTxtPage,
+	LlmsTxtSection,
 	MarkdownFormatOptions,
 	MarkdownTransform,
 	TransformContext,
@@ -22,6 +27,7 @@ export type HtmlToMarkdownOptions = Pick<
 	AgentMarkdownOptions,
 	| 'contentSelector'
 	| 'removeSelectors'
+	| 'keepSelectors'
 	| 'defaultRemoveSelectors'
 	| 'frontmatter'
 	| 'jsonLd'
@@ -44,5 +50,6 @@ export async function htmlToMarkdown(html: string, options: HtmlToMarkdownOption
 	const { url, ...rest } = options;
 	const { conversion, hooks } = resolveOptions(rest);
 	const pageUrl = url ? new URL(url) : createPageUrl('/', undefined);
-	return createConverter(conversion, hooks)({ html, pathname: pageUrl.pathname, url: pageUrl });
+	const page = await createConverter(conversion, hooks)({ html, pathname: pageUrl.pathname, url: pageUrl });
+	return page && { markdown: page.markdown, metadata: page.metadata };
 }

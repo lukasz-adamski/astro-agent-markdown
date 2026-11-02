@@ -78,11 +78,47 @@ describe('content selection', () => {
 			<script>alert(1)</script><style>p{}</style><noscript>JS</noscript>
 			<button>Click</button><form><input name="q"></form>
 			<p hidden>Hidden</p><p aria-hidden="true">Decorative</p>
-			<span class="sr-only">Screen reader</span>
 			<div data-markdown-ignore>Ignored</div>
 			<img src="data:image/png;base64,AAAA" alt="inline">
+			<img src="/logo.svg" alt=""><img src="/a.png" alt="A" role="presentation"><img src="/b.png" role="none">
 		</main>`);
 		expect(await convert(html)).toBe('Keep\n');
+	});
+
+	it('keeps images without alt text', async () => {
+		expect(await convert(page('<main><img src="/photo.jpg"></main>'))).toBe('![](/photo.jpg)\n');
+	});
+
+	it('keeps buttons labelling headings, accordions and tabs', async () => {
+		const html = page(`<main>
+			<h3><button type="button" aria-expanded="false" aria-controls="a1"><span>How long does it take?</span><svg></svg></button></h3>
+			<div id="a1"><p>Two to four weeks.</p></div>
+			<p><button aria-expanded="false">Show details</button> <button role="tab">Pricing</button></p>
+			<button type="button" aria-label="Play">▶</button>
+			<h3>Plain<button aria-expanded="false" hidden>Hidden</button><button data-markdown-ignore>Ignored</button></h3>
+			<div role="tablist"><button role="tab">npm</button><button role="tab">pnpm</button></div>
+		</main>`);
+		expect(await convert(html)).toBe(
+			'### How long does it take?\n\nTwo to four weeks.\n\nShow details Pricing\n\n### Plain\n\nnpm\n\npnpm\n',
+		);
+	});
+
+	it('keeps text written for screen readers', async () => {
+		const html = page(
+			'<main><p>Rated <span class="sr-only">4.8 out of 5</span><span aria-hidden="true">★★★★★</span></p></main>',
+		);
+		expect(await convert(html)).toBe('Rated 4.8 out of 5\n');
+	});
+
+	it('removes skip links', async () => {
+		const html =
+			'<html><body><a href="#main" class="sr-only">Skip to content</a><a class="skip-link" href="#main">Skip</a><p>Text</p></body></html>';
+		expect(await convert(html)).toBe('Text\n');
+	});
+
+	it('applies custom keep selectors', async () => {
+		const html = page('<main><p>Call us</p><div class="cta"><button>Book a call</button></div></main>');
+		expect(await convert(html, { keepSelectors: ['.cta button'] })).toBe('Call us\n\nBook a call\n');
 	});
 
 	it('applies custom removal selectors', async () => {
@@ -93,6 +129,11 @@ describe('content selection', () => {
 	it('can disable the default removal list', async () => {
 		const html = page('<main><nav>Table of contents</nav><p>Body</p></main>');
 		expect(await convert(html, { defaultRemoveSelectors: false })).toBe('Table of contents\n\nBody\n');
+	});
+
+	it('drops the default keep list with the default removal list', async () => {
+		const html = page('<main><h2><button>Question</button></h2><p>Answer</p></main>');
+		expect(await convert(html, { defaultRemoveSelectors: false, removeSelectors: ['button'] })).toBe('##\n\nAnswer\n');
 	});
 });
 
@@ -128,6 +169,13 @@ describe('markup normalization', () => {
 		expect(await convert(html)).toBe('## Wrapped\n\n## Prepended\n\n## Sibling\n');
 	});
 
+	it('keeps visible links to a heading', async () => {
+		const html = page('<main><h2 id="faq">FAQ</h2> <a href="#faq">Jump to FAQ</a></main>');
+		expect(await convert(html, { url: 'https://example.com/x/' })).toBe(
+			'## FAQ\n\n[Jump to FAQ](https://example.com/x/#faq)\n',
+		);
+	});
+
 	it('turns asides into labelled blockquotes', async () => {
 		const html = page(`<main>
 			<aside aria-label="Tip"><p aria-hidden="true">Tip</p><div><p>Use pnpm.</p></div></aside>
@@ -142,6 +190,41 @@ describe('markup normalization', () => {
 		);
 		expect(await convert(html)).toBe('| A | B     |\n| - | ----- |\n| 1 | ~~2~~ |\n');
 	});
+
+	it('drops formatting left empty', async () => {
+		const html = page(
+			'<main><p>Logo<i class="corner"></i><i class="corner"></i><b></b> and<span> </span>text <strong><img src="/i.png" alt="Icon"></strong></p></main>',
+		);
+		expect(await convert(html)).toBe('Logo and text **![Icon](/i.png)**\n');
+	});
+
+	it('writes definition lists as labelled lines', async () => {
+		const html = page(`<main>
+			<dl>
+				<dt>Time</dt><dd>2-4 weeks</dd>
+				<div><dt>Price</dt><dt>Cost</dt><dd>from <strong>$500</strong></dd><dd>or hourly</dd></div>
+				<dt>Process</dt><dd><p>Workshop.</p><ul><li>Design</li><li>Build</li></ul></dd>
+				<dt>Support</dt>
+			</dl>
+		</main>`);
+		expect(await convert(html)).toBe(
+			[
+				'**Time**: 2-4 weeks',
+				'',
+				'**Price, Cost**: from **$500**, or hourly',
+				'',
+				'**Process**',
+				'',
+				'Workshop.',
+				'',
+				'- Design',
+				'- Build',
+				'',
+				'**Support**',
+				'',
+			].join('\n'),
+		);
+	});
 });
 
 describe('URLs', () => {
@@ -153,18 +236,22 @@ describe('URLs', () => {
 
 	it('resolves against the page URL', async () => {
 		expect(await convert(html, { url: 'https://example.com/docs/page/' })).toBe(
-			'[Relative](https://example.com/docs/sibling/) [Root](https://example.com/root) [Fragment](#part) ' +
+			'[Relative](https://example.com/docs/sibling/) [Root](https://example.com/root) [Fragment](https://example.com/docs/page/#part) ' +
 				'[External](https://other.dev/x) [Mail](mailto:a@b.c) ![Image](https://example.com/docs/page/img.png)\n',
 		);
 	});
 
 	it('produces root-relative URLs without an origin', async () => {
-		expect(await convert(html)).toContain('[Relative](/sibling/) [Root](/root)');
+		expect(await convert(html)).toContain('[Relative](/sibling/) [Root](/root) [Fragment](/#part)');
+	});
+
+	it('unwraps placeholder links', async () => {
+		expect(await convert(page('<main><p><a href="#">Top</a></p></main>'))).toBe('Top\n');
 	});
 
 	it('preserves URLs when absoluteUrls is disabled', async () => {
 		expect(await convert(html, { url: 'https://example.com/docs/page/', absoluteUrls: false })).toContain(
-			'[Relative](../sibling/) [Root](/root)',
+			'[Relative](../sibling/) [Root](/root) [Fragment](#part)',
 		);
 	});
 });

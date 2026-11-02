@@ -46,8 +46,10 @@ describe('generateMarkdown', () => {
 
 		await generateMarkdown({
 			dir,
+			root: dir,
 			pathnames: ['blog', 'about'],
 			options: resolveOptions(),
+			llmsTxt: [],
 			routing,
 			site: 'https://example.com',
 			logger,
@@ -90,14 +92,27 @@ describe('writeCloudflareFiles', () => {
 			dir,
 			cloudflare,
 			routing,
-			contentSignal: null,
+			contentSignal: 'search=yes',
 			contentNegotiation: false,
 			buildOutput: 'static',
 			logger,
 		});
 		await expect(read('_worker.js')).rejects.toThrow();
-		expect(await read('_headers')).toContain('/*.md');
+		expect(await read('_headers')).toBe('# astro-agent-markdown\n/*.md\n  Content-Signal: search=yes\n');
 		expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('contentNegotiation'));
+	});
+
+	it('writes no _headers rule without a content signal', async () => {
+		await writeCloudflareFiles({
+			dir,
+			cloudflare: { ...cloudflare, worker: false },
+			routing,
+			contentSignal: null,
+			contentNegotiation: true,
+			buildOutput: 'static',
+			logger,
+		});
+		await expect(read('_headers')).rejects.toThrow();
 	});
 });
 

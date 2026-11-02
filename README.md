@@ -62,8 +62,8 @@ Every page goes through the same pipeline:
 
 1. The rendered HTML is parsed. Metadata is read from `<head>`.
 2. The main content is selected (`contentSelector`). Everything else is dropped.
-3. Non-content elements are removed (`removeSelectors`).
-4. The markup is normalized: code languages, heading permalinks, asides, relative URLs.
+3. Non-content elements are removed (`removeSelectors`), except those you keep (`keepSelectors`).
+4. The markup is normalized: code languages, heading permalinks, asides, definition lists, empty formatting, relative URLs.
 5. The result is converted to Markdown, and frontmatter and JSON-LD are added.
 
 ### Example
@@ -149,7 +149,7 @@ agentMarkdown({
 | Option    | Type       | Default  | Description                                                                           |
 | --------- | ---------- | -------- | ------------------------------------------------------------------------------------- |
 | `include` | `string[]` | `['**']` | Glob patterns of pages to convert, matched against the route pathname without `base`. |
-| `exclude` | `string[]` | `[]`     | Glob patterns of pages to skip. `/404` and `/500` are always skipped.                 |
+| `exclude` | `string[]` | `[]`     | Glob patterns of pages to skip. Error pages (`/404`, `/500`, `/en/404`, …) are always skipped. |
 
 Patterns are written like pathnames and ignore trailing slashes: `/blog/**` matches `/blog`, `/blog/` and `/blog/a/b/`.
 
@@ -165,18 +165,24 @@ These pages are skipped automatically:
 | ------------------------ | -------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------- |
 | `contentSelector`        | `string \| string[]` | `['[data-markdown-content]', 'main', '[role="main"]', 'body']` | CSS selectors for the main content. The first one that matches wins. |
 | `removeSelectors`        | `string[]`           | `[]`                                                           | More elements to remove, added to the built-in list.                 |
-| `defaultRemoveSelectors` | `boolean`            | `true`                                                         | Whether to apply the built-in removal list.                          |
+| `keepSelectors`          | `string[]`           | `[]`                                                           | Elements exempt from removal, added to the built-in list. They still go with a removed ancestor (a `form`, `nav` or `[hidden]` element), and their descendants can still be removed. |
+| `defaultRemoveSelectors` | `boolean`            | `true`                                                         | Whether to apply the built-in removal and keep lists.                |
 
 Built-in removal list ([`DEFAULT_REMOVE_SELECTORS`](src/core/selectors.ts)):
 
 - scripts, styles, `<noscript>` and `<template>`
 - embeds: `<iframe>`, `<object>`, `<embed>`, `<canvas>`, inline `<svg>`, `data:` images
+- decorative images: `alt=""`, `role="presentation"`, `role="none"`
 - page chrome: `<nav>`, `<footer>`, the page-level `<header>`, landmark roles
 - form controls: `<form>`, `<button>`, `<input>`, `<select>`, `<textarea>`, `<dialog>`
-- hidden content: `[hidden]`, `[aria-hidden="true"]`, `.sr-only`, `.visually-hidden`
+- hidden content: `[hidden]`, `[aria-hidden="true"]`
 - anything marked `[data-markdown-ignore]`
 
-Removal selectors are matched against the whole document. This is why `body > header` works even when `<body>` is the content root. Invalid selectors are rejected when the config loads.
+Built-in keep list ([`DEFAULT_KEEP_SELECTORS`](src/core/selectors.ts)): buttons that label content, meaning buttons inside headings, accordion triggers (`[aria-expanded]`) and tabs (`[role="tab"]`). An FAQ question rendered as `<h3><button>…</button></h3>` stays in the heading. Buttons outside text, such as a row of tabs, become separate lines. Hidden and `[data-markdown-ignore]` buttons are still removed.
+
+Text written for screen readers (`.sr-only`, `.visually-hidden`) is kept, because agents don't see the page either. Hide the visual duplicate with `aria-hidden="true"`, which is removed. Skip links (`a.sr-only[href^="#"]`, `.skip-link`) are removed.
+
+Selectors are matched against the whole document. This is why `body > header` works even when `<body>` is the content root. They are matched by [hast-util-select](https://github.com/syntax-tree/hast-util-select), which supports only compound selectors inside `:not()` and `:is()`: use `keepSelectors: ['h2 button']`, not `button:not(h2 button)`. Invalid and unsupported selectors are rejected when the config loads.
 
 You can also mark content directly in your markup:
 
@@ -197,7 +203,9 @@ You can also mark content directly in your markup:
 | `markdown`      | `MarkdownFormatOptions`         | `{ bullet: '-', rule: '-' }`               | Formatting options for [`remark-stringify`](https://github.com/remarkjs/remark/tree/main/packages/remark-stringify#options): `bullet`, `emphasis`, `strong`, `fence`, `rule`, `listItemIndent`, `setext` and more. |
 | `outputPath`    | `'sibling' \| 'nested'`         | `'sibling'`                                | `'sibling'` writes `/docs/intro.md`. `'nested'` writes `/docs/intro/index.md`. The home page is always `/index.md`.                                                                                                 |
 | `alternateLink` | `boolean`                       | `true`                                     | Add `<link rel="alternate" type="text/markdown">` to generated HTML, and a `Link` header to on-demand responses.                                                                                                   |
-| `llmsTxt`       | `boolean \| LlmsTxtOptions`     | `false`                                    | Generate `/llms.txt` listing every Markdown page. Options: `title`, `description` (both default to the home page's values) and `full` (also writes `llms-full.txt` with the content of every page).                |
+| `llmsTxt`       | `boolean \| LlmsTxtOptions \| LlmsTxtOptions[]` | `false`                    | Generate `/llms.txt` listing every Markdown page. See [llms.txt](#llmstxt).                                                                                                                                         |
+
+Definition lists become one line per term (`**Time**: 2-4 weeks`). Fragment links such as `#pricing` point to the HTML page, because the ids they target exist only there. Placeholder links (`href="#"`) keep only their text.
 
 How frontmatter fields are filled:
 
@@ -208,6 +216,65 @@ How frontmatter fields are filled:
 | `url`         | `<link rel="canonical">`, then `og:url`, then the page URL                     |
 | `image`       | `og:image`, then `twitter:image`                                               |
 | `lang`        | `<html lang>`                                                                  |
+
+### llms.txt
+
+`llmsTxt: true` writes `/llms.txt`. It starts with the site name and the home page's description, then links every Markdown page with its description, home page first. The site name comes from `og:site_name`, or from the name most titles start or end with, such as `Acme` in `About | Acme`. Link labels leave that name out.
+
+Pass options to shape the file, or an array of options for several files:
+
+| Option        | Type                                         | Default       | Description |
+| ------------- | -------------------------------------------- | ------------- | ----------- |
+| `path`        | `string`                                     | `'/llms.txt'` | Where the index is written. The page in its directory is the home page (`/en/llms.txt` → `/en`). |
+| `locales`     | `boolean \| Record<string, options>`         | `false`       | One file per locale of Astro's `i18n` config: `/llms.txt` for the default locale, `/<locale>/llms.txt` for the others. It sets `path`, `include` and `language`, which can't be combined with it; use `exclude` to leave pages out. The other options apply to every file. Patterns and pathnames match full pathnames, so set `sectionOrder` and `optional` per locale. An object keyed by locale overrides options for some locales, such as their `introFile`, `sections` or `optional` pages. |
+| `include`     | `string[]`                                   | `['**']`      | Glob patterns of the pages listed. |
+| `exclude`     | `string[]`                                   | `[]`          | Glob patterns of pages left out. |
+| `title`       | `string`                                     | site name     | Top-level heading. |
+| `description` | `string`                                     | home page     | Summary below the heading. |
+| `intro`       | `string`                                     |               | Markdown inserted after the summary, before the links: facts, rules, contact details. A leading frontmatter block, `# heading` and blockquote are skipped. |
+| `introFile`   | `string`                                     |               | The same, from a file relative to the project root. The build fails if the file is missing. |
+| `sections`    | `{ title, include, exclude? }[] \| 'auto'`   | `[]`          | Group pages under `##` headings. A page goes to the first matching section; the rest are listed first, under `## Pages`. `'auto'` makes a section of every first path segment that has subpages, titled after the segment's page. |
+| `sectionOrder` | `string[]`                                  | `[]`          | Order of automatic sections, as the pathnames of their pages (`['/docs', '/blog']`). Sections not listed follow in path order. Needs `sections: 'auto'`: explicit sections keep the order they are given in. |
+| `optional`    | `string[]`                                   | `[]`          | Glob patterns of secondary pages, such as legal pages, listed last under [`## Optional`](https://llmstxt.org/#format). |
+| `entry`       | `(page) => { label?, description? } \| false` |               | Change how a page is listed. `false` leaves it out of the index but keeps it in `llms-full.txt`. `description: false` drops its summary. `page` has `pathname`, `href` and `metadata`. |
+| `language`    | `string`                                     | locale        | Name of the file's language in links between files. Defaults to the name of the i18n locale, or of the home page's `lang`, in that language (`Deutsch`, `English`). The region is named only when two files share a language (`British English`). |
+| `crossLinks`  | `boolean`                                    | `true`        | With several files, link each to the others under `## Other languages`. Agents only look for `/llms.txt`, so this is how they find the rest. |
+| `index`       | `boolean`                                    | `true`        | Write the index. Turn it off to keep a hand-written `llms.txt` and only generate `llms-full.txt`. |
+| `full`        | `boolean \| LlmsFullTxtOptions`              | `false`       | Also write `llms-full.txt` next to the index. See below. |
+
+`llms-full.txt` holds the Markdown of every listed page in the order of the index, without JSON-LD. Each page starts with its `# heading` and a `Source:` line with its URL. The heading is the page's first `# heading` before any `##` heading; an eyebrow label or tag list above it follows the `Source:` line. Pages without one get their link label. Options:
+
+| Option       | Type                                  | Default    | Description |
+| ------------ | ------------------------------------- | ---------- | ----------- |
+| `pageHeader` | `'source' \| 'frontmatter'`           | `'source'` | Start each page with its heading and source, or with its YAML frontmatter. |
+| `optional`   | `boolean`                             | `false`    | Include the pages of the `Optional` section. |
+| `dedupe`     | `boolean \| { minShare?, minPages? }` | `false`    | Remove boilerplate such as calls to action: a top-level block (a paragraph, a whole list, a heading with the block after it) found on at least `minShare` of the pages (default `0.5`) and on at least `minPages` pages (default `3`) stays only on the first page that has it. Repeats within a page, `**term**: details` facts and headings followed by another heading are always kept. |
+| `maxSize`    | `number \| false`                     | `512000`   | Warn when the file is larger than this many bytes, naming the largest pages. |
+
+For a site in English at `/` and German at `/de/`, with legal pages in the `Optional` section:
+
+```js
+agentMarkdown({
+	llmsTxt: {
+		locales: {
+			en: {
+				introFile: './src/llms-intro.en.md',
+				sectionOrder: ['/docs', '/blog'],
+				optional: ['/privacy', '/terms'],
+			},
+			de: {
+				introFile: './src/llms-intro.de.md',
+				sectionOrder: ['/de/docs', '/de/blog'],
+				optional: ['/de/datenschutz', '/de/impressum'],
+			},
+		},
+		sections: 'auto',
+		full: { dedupe: true },
+	},
+});
+```
+
+The build warns about sections that match no page, `sectionOrder` entries that aren't sections, pages listed without a description, and pages in no file when there are several.
 
 ### Server
 
@@ -222,7 +289,7 @@ How frontmatter fields are filled:
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `cloudflare` | `boolean \| CloudflareOptions` | `false` | Write deployment files for [Workers static assets](https://developers.cloudflare.com/workers/static-assets/). `true` enables everything below. |
-| `cloudflare.headers` | `boolean` | `true` | Add a `/*.md` rule to `_headers`: `Content-Type: text/markdown; charset=utf-8`, plus `Content-Signal` when `contentSignal` is set. |
+| `cloudflare.headers` | `boolean` | `true` | Add a `/*.md` rule with `Content-Signal` to `_headers` when `contentSignal` is set. |
 | `cloudflare.worker` | `boolean` | `true` | Write `_worker.js`, a Worker that answers `Accept: text/markdown` with the page's Markdown file, and add it to `.assetsignore`. Static output only. |
 | `cloudflare.negotiation` | `'rewrite' \| 'redirect'` | `'rewrite'` | `'rewrite'` serves the Markdown at the page URL. `'redirect'` sends a `302` to the `.md` URL. |
 
@@ -232,7 +299,7 @@ See [Cloudflare Workers](#cloudflare-workers) for the Wrangler setup.
 
 | Option          | Type                                    | Description                                                                                       |
 | --------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `rehypePlugins` | `PluggableList`                         | Run on the cleaned HTML tree, before conversion.                                                  |
+| `rehypePlugins` | `PluggableList`                         | Run on the main content after removal and normalization, before conversion. To rescue a removed element, use `keepSelectors`. |
 | `remarkPlugins` | `PluggableList`                         | Run on the Markdown tree, before serialization.                                                   |
 | `transform`     | `(markdown, context) => string \| void` | Last step. Return a string to replace the output. `context` has `pathname`, `url` and `metadata`. |
 
@@ -272,7 +339,7 @@ With `cloudflare: true`, a static build writes three extra files to `dist/`:
 
 | File | Purpose |
 | --- | --- |
-| `_headers` | A `/*.md` rule with `Content-Type: text/markdown; charset=utf-8` and `Content-Signal`. Appended to your own `public/_headers` if you have one. |
+| `_headers` | A `/*.md` rule with `Content-Signal`, when `contentSignal` is set. Appended to your own `public/_headers` if you have one. Static assets already serve `.md` files as `text/markdown; charset=utf-8`. |
 | `_worker.js` | A Worker that serves the page's Markdown file for `Accept: text/markdown` and adds `Vary: Accept` to HTML. It imports `astro-agent-markdown/cloudflare`, which Wrangler bundles (about 6 KiB). |
 | `.assetsignore` | Lists `_worker.js`, so the Worker isn't uploaded as a public file. |
 

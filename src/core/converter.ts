@@ -32,7 +32,13 @@ export interface MarkdownPage {
 	metadata: PageMetadata;
 }
 
-export type Converter = (input: ConvertInput) => Promise<MarkdownPage | null>;
+/** A converted page with the generated frontmatter and JSON-LD blocks, as included in `markdown`. */
+export interface ConvertedPage extends MarkdownPage {
+	frontmatter: string;
+	jsonLd: string;
+}
+
+export type Converter = (input: ConvertInput) => Promise<ConvertedPage | null>;
 
 /**
  * Creates a reusable HTML → Markdown converter. Resolves to `null` for pages
@@ -53,23 +59,21 @@ export function createConverter(options: ConversionOptions, hooks: ConversionHoo
 		const tree = parser.parse(html);
 		const metadata = extractMetadata(tree, url);
 		if (metadata.redirect || metadata.ignored) return null;
-		if (!selectContent(tree, options.contentSelectors, options.removeSelectors)) return null;
+		if (!selectContent(tree, options.contentSelectors, options.removeSelectors, options.keepSelectors)) return null;
 		normalizeContent(tree, options.absoluteUrls ? url : undefined);
 
 		const file = new VFile({ data: { page: metadata } });
 		const mdast = (await processor.run(tree as HastRoot, file)) as MdastRoot;
 		const body = processor.stringify(mdast, file).trim();
 
-		let markdown = joinSections([
-			toFrontmatter(frontmatterEntries(metadata, options.frontmatter)),
-			body,
-			options.jsonLd ? jsonLdBlock(metadata.jsonLd) : '',
-		]);
+		const frontmatter = toFrontmatter(frontmatterEntries(metadata, options.frontmatter));
+		const jsonLd = options.jsonLd ? jsonLdBlock(metadata.jsonLd) : '';
+		let markdown = joinSections([frontmatter, body, jsonLd]);
 		if (hooks.transform) {
 			const context = { pathname, url: hasPublicOrigin(url) ? url : undefined, metadata };
 			markdown = (await hooks.transform(markdown, context)) ?? markdown;
 		}
-		return { markdown, metadata };
+		return { markdown, metadata, frontmatter, jsonLd };
 	};
 }
 

@@ -14,11 +14,11 @@ export function hasPublicOrigin(url: URL): boolean {
 }
 
 /**
- * Resolves `value` against `base`. Fragment-only references and unparsable
+ * Resolves `value` against `base`. Fragment-only references point to the HTML
+ * page, as the ids they target don't exist in its Markdown version. Unparsable
  * values are returned unchanged.
  */
 export function resolveUrl(value: string, base: URL): string {
-	if (value.startsWith('#')) return value;
 	let url: URL;
 	try {
 		url = new URL(value, base);

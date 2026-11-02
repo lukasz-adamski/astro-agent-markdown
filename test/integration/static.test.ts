@@ -67,7 +67,6 @@ describe('static build', () => {
 				'',
 				'# astro-agent-markdown',
 				'/*.md',
-				'  Content-Type: text/markdown; charset=utf-8',
 				'  Content-Signal: ai-train=no, search=yes, ai-input=yes',
 				'',
 			].join('\n'),

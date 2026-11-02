@@ -31,7 +31,7 @@ export async function writeCloudflareFiles({
 	buildOutput,
 	logger,
 }: CloudflareFilesOptions): Promise<void> {
-	if (cloudflare.headers) {
+	if (cloudflare.headers && contentSignal) {
 		await appendBlock(new URL('_headers', dir), headersRule(contentSignal));
 	}
 	if (!cloudflare.worker) return;
@@ -61,10 +61,12 @@ export async function writeCloudflareFiles({
 	await appendBlock(new URL('.assetsignore', dir), `${MARKER}\n${WORKER_FILE}`);
 }
 
-function headersRule(contentSignal: string | null): string {
-	const headers = ['Content-Type: text/markdown; charset=utf-8'];
-	if (contentSignal) headers.push(`Content-Signal: ${contentSignal}`);
-	return [MARKER, '/*.md', ...headers.map((header) => `  ${header}`)].join('\n');
+/**
+ * Workers static assets already serve `.md` files as `text/markdown`. Setting
+ * `Content-Type` here would also apply to the HTML 404 page of a missing file.
+ */
+function headersRule(contentSignal: string): string {
+	return [MARKER, '/*.md', `  Content-Signal: ${contentSignal}`].join('\n');
 }
 
 function workerSource(options: MarkdownWorkerOptions): string {
